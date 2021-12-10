@@ -155,7 +155,7 @@ def run(protocol: protocol_api.ProtocolContext):
                           blowout_location='destination well', 
                           new_tip='never')
             
-        elif x < 20:
+        elif x <= 20:
             p20.transfer(x, reservoir.columns()[0], tempplate.columns()[n], 
                           touch_tip=False, blow_out=True, 
                           blowout_location='destination well', 
@@ -195,7 +195,7 @@ def run(protocol: protocol_api.ProtocolContext):
                           blowout_location='destination well', 
                           new_tip='never')
             
-        elif x < 20:
+        elif x <= 20:
             p20.transfer(x, reservoir.columns()[1], tempplate.columns()[n], 
                           touch_tip=False, blow_out=True, 
                           blowout_location='destination well', 
