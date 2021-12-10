@@ -1,0 +1,359 @@
+ # -*- coding: utf-8 -*-
+"""
+Created on Thu Dec  9 10:53:37 2021
+
+@author: ecw21
+"""
+
+#-------------------- PARAMTERS --------------------
+#---------------- Edit for each run ----------------
+
+# Amount of dry DNA indicated in the label of each oligo tube (nmol)
+oligos_nmol = (28.4, 31.3, 25.1, 24.3, 33.2, 40.2, 50.1)
+
+# Desired concentration of resuspended oligos (uM)
+oligos_resusp_concentration = 100
+
+# Desired test concentrations of salt (i.e. Mg2+) in mM - always 12 values # does it have to be?
+test_gradient = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
+
+# No replicates per gradient
+replicates = 8
+
+# Concentration of Salt Stock (mM) 
+salt_conc = 40
+
+# Total volume of rxn (ul)
+total_rxn_vol = 40
+
+
+#If there is a scaffold strand
+scaffold = True
+
+#Concentration scaffold strand (nM), What buffer is it in?
+scaffold_conc = 100
+
+# Lists for the values to append to
+salt_in = []
+buffer_in = []
+'''
+Check that the values for pipetting (in the lists salt_in and buffer_in) are round numbers 
+This is to reduce the chance of pipetting errors and improve accuracy in the protocol 
+'''
+
+#---------------------------------------------------
+
+#Import Functions:
+from opentrons import protocol_api
+import math
+import sys
+
+
+#---------------------------------------------------
+#---------------------------------------------------
+
+#------------------- CALCULATIONS ------------------
+
+# Number of oligo tubes to be resuspended
+n_oligos = len(oligos_nmol)
+
+# Volume that the oligos need to be resuspended in to reach the desired concentration
+volume_added_to_oligos = [round(x / oligos_resusp_concentration * 1000) for x in oligos_nmol]
+
+#Caculated amount of mix needed
+mix_vol_single = total_rxn_vol/4
+mix_volume = mix_vol_single * len(test_gradient) * replicates
+mix_volume_rounded = math.ceil(mix_volume/100)*100
+
+#If mix volume is too big
+if mix_volume_rounded >= 1200:
+  mix_volume_rounded = math.ceil((mix_volume_rounded/2)/100)*100
+  mix_split = True
+else: 
+  mix_split = False 
+
+#scaffold concentration in final mix
+scaffold_in_mix = mix_volume_rounded/(scaffold_conc/40)
+
+# Check that the concentration of the salt stock is high enough
+if salt_conc < max(test_gradient):
+	print('The concentration of the salt stock provided is too low to cover the gradient.')
+	sys.exit()
+  
+
+  
+#-------------------TEST GRADIENT--------------------
+# Calculates how much of the stock solution to add to get the desired final conc, calc amount of buffer to make up to full rxn vol, returns as two lists
+for i in test_gradient:
+    mg = ((i * total_rxn_vol) / salt_conc)
+    salt_in.append(mg)
+    
+    buff = (total_rxn_vol - mg - mix_vol_single) # Note the 10 is for the oligo mix
+    buffer_in.append(buff)
+
+#--------------------- PROTOCOL --------------------
+
+# metadata
+metadata = {
+    'protocolName': 'DNA Nanostructures and Buffer Dilutions',
+    'author': 'MegaTron',
+    'description': 'Test',
+    'apiLevel': '2.11'
+}
+
+def run(protocol: protocol_api.ProtocolContext):
+  
+    #Define Labware
+    #plate = protocol.load_labware('costar3370flatbottomtransparent_96_wellplate_200ul', 1)
+    tiprack_1 = protocol.load_labware('opentrons_96_tiprack_300ul', 8)
+    tiprack_2 = protocol.load_labware('opentrons_96_tiprack_20ul', 1)
+    tiprack_3 = protocol.load_labware('opentrons_96_tiprack_20ul', 4)
+    reservoir = protocol.load_labware('4ti0131_12_reservoir_21000ul', 5)
+    tempdeck = protocol.load_module('tempdeck', 10)
+    tempplate = tempdeck.load_labware('opentrons_96_aluminumblock_biorad_wellplate_200ul', label='Temperature-Controlled Tubes')
+    tuberack = protocol.load_labware('opentrons_24_tuberack_eppendorf_1.5ml_safelock_snapcap', 3) #opentrons_24_tuberack_generic_2ml_screwcap
+    tuberack2 = protocol.load_labware('opentrons_24_tuberack_eppendorf_1.5ml_safelock_snapcap', 6) #opentrons_24_tuberack_generic_2ml_screwcap
+    tuberack3 = protocol.load_labware('opentrons_24_tuberack_eppendorf_1.5ml_safelock_snapcap', 9) #opentrons_24_tuberack_generic_2ml_screwcap
+    
+    # Pipettes
+    p300 = protocol.load_instrument('p300_single_gen2',  'left', tip_racks=[tiprack_1])
+    p20 = protocol.load_instrument('p20_single_gen2', 'right', tip_racks = [tiprack_2, tiprack_3])
+    
+    #Step 1 - Calculation of buffer to add to dried pellet 
+    # I did it above, out of the run() function, just in case
+    
+    #Step 2 - Resuspend in standard buffer to a uniform concentration to 100 uM
+    # necessary volumes are stored in 'volume_added_to_oligos'
+
+    p300.transfer(volume_added_to_oligos, reservoir.columns()[0], tuberack.wells()[0:n_oligos],
+             	   mix_after=(10, 100), #change as this is the mixing
+                   touch_tip=True,
+                   blow_out= True,
+                   blowout_location= 'destination well',
+                   new_tip= 'always')
+    
+    #ADD WAITING STEP - pipette gradient in the meantime
+    #Step 4 - Split across 96-well plate with single gradient buffer
+    
+    # Transferring Tris accross 96-well plate
+    
+    # It only picks up the tips that it's actually going to use to cover all the gradient.
+    if min(buffer_in) > 20:
+    	p300.pick_up_tip()
+    
+    elif max(buffer_in) < 20:
+    	p20.pick_up_tip()
+      
+    else:
+    	p300.pick_up_tip()
+    	p20.pick_up_tip()
+    
+    for n, x in enumerate(buffer_in):
+        if x > 20:
+            p300.transfer(x, reservoir.columns()[0], tempplate.columns()[n], 
+                          touch_tip=False, blow_out=True, 
+                          blowout_location='destination well', 
+                          new_tip='never')
+            
+        elif x < 20:
+            p20.transfer(x, reservoir.columns()[0], tempplate.columns()[n], 
+                          touch_tip=False, blow_out=True, 
+                          blowout_location='destination well', 
+                          new_tip='never')
+        elif x < 2:
+            protocol.comment('You are trying to pipette too small a volume! Please note results from this may not be accurate')
+            p20.transfer(x, reservoir.columns()[0], tempplate.columns()[n], 
+                          touch_tip=False, blow_out=True, 
+                          blowout_location='destination well', 
+                          new_tip='never')
+    if min(buffer_in) > 20:
+    	p300.drop_tip()
+    
+    elif max(buffer_in) < 20:
+    	p20.drop_tip()
+      
+    else:
+    	p300.drop_tip()
+    	p20.drop_tip()
+          
+        
+    #Mg gradient from 0 to 22mM, 8 repeats (A-H)
+    if min(salt_in) > 20:
+    	p300.pick_up_tip()
+    
+    elif max(salt_in) < 20:
+    	p20.pick_up_tip()
+      
+    else:
+    	p300.pick_up_tip()
+    	p20.pick_up_tip()
+
+    for n, x in enumerate(salt_in):
+        if x > 20:
+            p300.transfer(x, reservoir.columns()[1], tempplate.columns()[n], 
+                          touch_tip=False, blow_out=True, 
+                          blowout_location='destination well', 
+                          new_tip='never')
+            
+        elif x < 20:
+            p20.transfer(x, reservoir.columns()[1], tempplate.columns()[n], 
+                          touch_tip=False, blow_out=True, 
+                          blowout_location='destination well', 
+                          new_tip='never')
+        elif x < 2:
+            protocol.comment('You are trying to pipette too small a volume! Please note results from this may not be accurate')
+            p20.transfer(x, reservoir.columns()[1], tempplate.columns()[n], 
+                          touch_tip=False, blow_out=True, 
+                          blowout_location='destination well', 
+                          new_tip='never')
+    if min(salt_in) > 20:
+    	p300.drop_tip()
+    
+    elif max(salt_in) < 20:
+    	p20.drop_tip()
+      
+    else:
+    	p300.drop_tip()
+    	p20.drop_tip()
+      
+    #Step 3 - Mix components in correct amounts - onepot to 200 nM (now resuspended)
+    no_mixtogether = 10 # It's the maximum number of oligos we can have in a sibgle tube. Assumption: we can number wells.
+    mixes = n_oligos//no_mixtogether #division rounds down
+    total_mixes = mixes + 1
+    final_mix = n_oligos%no_mixtogether #remainder of division - number of strands over number of rows
+    pipette_step = mix_volume_rounded/10
+    
+    #Add code for the case of more than 24 tubes - more tuberacks, for now limit of 24 tubes 
+    
+    #First dilution
+    for i in range(mixes): 
+        p300.transfer(pipette_step, tuberack.wells()[i*10:(i*10+10)], tuberack2.wells()[i],  #how to select column & row, change to correct equipment, what if there is more than one column of mixes, are rows in 10s 
+                        touch_tip=False,
+                        blow_out=True,
+                        blowout_location='destination well',
+                        new_tip='always')
+    
+    #final column  
+    p300.transfer(pipette_step, tuberack.wells()[mixes*10:(mixes*10+final_mix)], tuberack2.wells()[mixes], 
+                  touch_tip=False,
+                  blow_out=True,
+                  blowout_location='destination well',
+                  new_tip='always')  
+    
+    p300.transfer((mix_volume_rounded-pipette_step*final_mix), reservoir.columns()[0], tuberack2.wells()[mixes], #add buffer to 100 nM
+                touch_tip=False,
+                blow_out=True,
+                blowout_location='destination well',
+                new_tip='once') 
+    
+    #Strands in 10 uM
+    
+    #Second dilution
+    mixes_second = total_mixes//no_mixtogether #division rounds down
+    total_mixes_second = mixes_second + 1
+    final_mix_second = total_mixes%no_mixtogether #remainder of division - number of strands over number of rows
+    
+    for i in range(mixes_second): 
+        p300.transfer(pipette_step, tuberack2.wells()[i*10:(i*10+10)], tuberack3.wells()[i],  #how to select column & row, change to correct equipment, what if there is more than one column of mixes, are rows in 10s 
+                  touch_tip=False,
+                  blow_out=True,
+                  blowout_location='destination well',
+                  new_tip='always')
+    
+    #final column  
+    p300.transfer(pipette_step, tuberack2.wells()[mixes_second*10:(mixes_second*10+final_mix_second)], tuberack3.wells()[mixes_second], 
+              touch_tip=False,
+              blow_out=True,
+              blowout_location='destination well',
+              new_tip='always')  
+    
+    p300.transfer((mix_volume_rounded-pipette_step*final_mix_second), reservoir.columns()[0], tuberack3.wells()[mixes_second], #add buffer to 100 nM
+            touch_tip=False,
+            blow_out=True,
+            blowout_location='destination well',
+            new_tip='once') 
+    
+    #Strands in 1 uM
+    
+    #Third dilution 
+    #Assumed this will result in one tube, this means the limit is 1000 strands in total 
+    final_mix_third = total_mixes_second%no_mixtogether #remainder of division - number of strands over number of rows
+    pipette_step3 = mix_volume_rounded/5
+    
+    #final mix put into final well tuberack3 
+    p300.transfer(pipette_step3, tuberack3.wells()[0:final_mix_second], tuberack3.wells()[-1], 
+              touch_tip=False,
+              blow_out=True,
+              blowout_location='destination well',
+              new_tip='always')   
+    
+    if scaffold == True: #the way I have written it now there is a limit of 300 strands when there is a scaffold
+        p300.transfer((scaffold_in_mix), tuberack3.wells()[3], tuberack3.wells()[-1], #add scaffold to 40 nM #just a random location on tuberack3 for the scaffold
+                touch_tip=False,
+                blow_out=True,
+                blowout_location='destination well',
+                new_tip='once')
+        
+        p300.transfer((mix_volume_rounded-pipette_step3*final_mix_third-scaffold_in_mix), reservoir.columns()[0], tuberack3.wells()[-1], #add buffer to 200 nM
+                touch_tip=False,
+                blow_out=True,
+                blowout_location='destination well',
+                new_tip='once') 
+    else: 
+        p300.transfer((mix_volume_rounded-pipette_step3*final_mix_third), reservoir.columns()[0], tuberack3.wells()[-1], #add buffer to 200 nM
+                touch_tip=False,
+                blow_out=True,
+                blowout_location='destination well',
+                new_tip='once')
+    
+    
+    if mix_split == True: 
+      p300.transfer(pipette_step3, tuberack3.wells()[0:final_mix_second], tuberack3.wells()[-2], 
+                touch_tip=False,
+                blow_out=True,
+                blowout_location='destination well',
+                new_tip='always')   
+
+      if scaffold == True: #the way I have written it now there is a limit of 300 strands when there is a scaffold
+          p300.transfer((scaffold_in_mix), tuberack3.wells()[3], tuberack3.wells()[-2], #add scaffold to 40 nM #just a random location on tuberack3 for the scaffold
+                  touch_tip=False,
+                  blow_out=True,
+                  blowout_location='destination well',
+                  new_tip='once')
+
+          p300.transfer((mix_volume_rounded-pipette_step3*final_mix_third-scaffold_in_mix), reservoir.columns()[0], tuberack3.wells()[-2], #add buffer to 200 nM
+                  touch_tip=False,
+                  blow_out=True,
+                  blowout_location='destination well',
+                  new_tip='once') 
+      else: 
+          p300.transfer((mix_volume_rounded-pipette_step3*final_mix_third), reservoir.columns()[0], tuberack3.wells()[-1], #add buffer to 200 nM
+                  touch_tip=False,
+                  blow_out=True,
+                  blowout_location='destination well',
+                  new_tip='once')
+    #Final volume of mix is equal to 200 uL, could be increased, each strand in 200 nM
+    
+    #Add DNA to heatdeck PCR tray
+    p20.transfer(10, tuberack3.wells()[0],tempplate.columns()[0:11],
+                 mix_after=(10, 20), 
+                 touch_tip=False, blow_out=True,
+                 blowout_location='destination well',
+                 new_tip='always')
+                                      
+    #Step 5 - Heating and Cooling Plate
+      #According to DNA Origami paper, need to heat to near boiling for a short time, followed by gradual cooling - this should be over a few hours
+      
+    #Heating step
+    tempdeck.set_temperature(90)
+    protocol.comment('Incubating at 90˚C')
+    protocol.delay(minutes = 20)
+
+      #Cooling
+    tempdeck.set_temperature(4)
+    protocol.comment('Incubating at 4˚C for 2 hours')
+    protocol.delay(minutes = 120)
+  
+  #PCR step
+  
+  
